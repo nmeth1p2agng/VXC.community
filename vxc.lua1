@@ -1,0 +1,1452 @@
+--================================================
+-- VXC EGG NAME ESP V3.4.9
+-- ULTRA FAST MERGED EDITION - RETURN FIX
+-- YELLOW GUI + VALUE/RATE SORT + TARGET SELECTION
+-- EVENT-ASSISTED EGG DETECTION + CACHED GAME DATA
+-- DROPPED EGG + CARRIED EGG ESP
+-- GROUND FOLLOW FLY + AUTO STEAL ATTEMPT + AUTO RETURN
+--==================================================
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ReplicatedFirst = game:GetService("ReplicatedFirst")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+if not player then return end
+
+--==================================================
+--=== STAGE 1 ===
+--==================================================
+
+local PANEL_WIDTH, PANEL_HEIGHT = 220, 350
+local SCAN_INTERVAL = 0.15
+local DATA_CACHE_INTERVAL = 0.5
+local WORLD_RESCAN_INTERVAL = 15
+local FLY_TIMEOUT = 90
+local MAX_DISTANCE = 10000
+
+local HOVER_HEIGHT = 0
+local FLY_HEIGHT_Y = 115.93
+local EGG_PICKUP_HEIGHT_Y = 71.19
+local HEIGHT_TOLERANCE = 1.5
+
+local FLY_HORIZONTAL_SPEED = 240
+local FLY_APPROACH_SPEED = 90
+local DESCEND_SPEED = 240
+local ASCEND_SPEED = 200
+local APPROACH_DISTANCE = 1.5
+local STEAL_MAX_DISTANCE = 14
+local STEAL_RETRY_DELAY = 0.25
+local AUTO_STEAL_ENABLED = true
+local WAIT_AT_TARGET = 0.1
+
+local RETURN_TO_SPAWN_ENABLED = true
+local RETURN_TIMEOUT = 180
+
+-- Return speed uses the current Humanoid.WalkSpeed directly.
+-- RETURN_SPEED_PERCENT is retained for compatibility but not applied.
+
+local RETURN_SPEED_PERCENT = 100
+local RETURN_ARRIVAL_DISTANCE = 3
+local RETURN_SLOW_DISTANCE = 8
+
+local PICKUP_CONFIRM_TIMEOUT = 10
+local PICKUP_POLL_INTERVAL = 0.2
+local AUTO_FLY_OFF_AFTER_RETURN = true
+
+local YELLOW = Color3.fromRGB(255, 255, 0)
+local YELLOW_LIGHT = Color3.fromRGB(255, 245, 100)
+local YELLOW_DARK = Color3.fromRGB(100, 85, 0)
+local YELLOW_BUTTON = Color3.fromRGB(145, 115, 0)
+local YELLOW_STROKE = Color3.fromRGB(190, 160, 0)
+local DARK_BACKGROUND = Color3.fromRGB(17, 20, 29)
+local GREEN = Color3.fromRGB(100, 235, 155)
+local PURPLE = Color3.fromRGB(190, 160, 255)
+
+--==================================================
+-- VXC ANTI DEAD V2.1
+--==================================================
+
+local AntiDeadEnabled = true
+local AntiDeadCharacterConnection = nil
+local AntiDeadHealthConnection = nil
+local AntiDeadHeartbeatConnection = nil
+local AntiDeadCharacter = nil
+
+local function DisconnectAntiDeadCharacter()
+    if AntiDeadHealthConnection then
+        AntiDeadHealthConnection:Disconnect()
+        AntiDeadHealthConnection = nil
+    end
+    if AntiDeadHeartbeatConnection then
+        AntiDeadHeartbeatConnection:Disconnect()
+        AntiDeadHeartbeatConnection = nil
+    end
+    AntiDeadCharacter = nil
+end
+
+local function ApplyAntiDead(character)
+    if not AntiDeadEnabled or not character then return end
+    DisconnectAntiDeadCharacter()
+
+    local humanoid = character:WaitForChild("Humanoid", 10)
+    if not humanoid or not humanoid.Parent or player.Character ~= character then
+        return
+    end
+    AntiDeadCharacter = character
+
+    pcall(function()
+        humanoid.BreakJointsOnDeath = false
+        humanoid.RequiresNeck = false
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+    end)
+
+    local function CheckHealth()
+        if not AntiDeadEnabled or player.Character ~= character or not humanoid.Parent then return end
+        local health, maxHealth = humanoid.Health, humanoid.MaxHealth
+        if health > 0 and maxHealth > 0 and health < maxHealth then
+            pcall(function() humanoid.Health = maxHealth end)
+        end
+    end
+
+    AntiDeadHealthConnection = humanoid.HealthChanged:Connect(CheckHealth)
+    AntiDeadHeartbeatConnection = RunService.Heartbeat:Connect(function()
+        if not AntiDeadEnabled or player.Character ~= character or not humanoid.Parent then return end
+        CheckHealth()
+    end)
+    CheckHealth()
+    print("[VXC Anti Dead] Monitoring aktif")
+end
+
+DisconnectAntiDeadCharacter()
+if player.Character then task.spawn(ApplyAntiDead, player.Character) end
+if AntiDeadCharacterConnection then AntiDeadCharacterConnection:Disconnect() end
+AntiDeadCharacterConnection = player.CharacterAdded:Connect(function(character)
+    DisconnectAntiDeadCharacter()
+    task.spawn(ApplyAntiDead, character)
+end)
+print("[VXC Anti Dead V2.1] Auto-start aktif")
+
+--==================================================
+--=== STAGE 2 ===
+--==================================================
+
+local playerGui = player:FindFirstChildOfClass("PlayerGui") or player:WaitForChild("PlayerGui", 10)
+if not playerGui then return end
+
+for _, name in ipairs({
+    "VXC_EggESP_V28", "VXC_EggESP_V29", "VXC_EggESP_V30",
+    "VXC_EggESP_V31", "VXC_EggESP_V32", "VXC_EggESP_V33",
+    "VXC_EggESP_V333", "VXC_EggESP_V334", "VXC_EggESP_V335",
+    "VXC_EggESP_V336", "VXC_EggESP_V337", "VXC_EggESP_V338",
+    "VXC_EggESP_V339", "VXC_EggESP_V340", "VXC_EggESP_V341",
+    "VXC_EggESP_V343", "VXC_EggESP_V344",
+    "VXC_EggESP_V349", "VXC_EGG_ESP_V1"
+}) do
+    local old = playerGui:FindFirstChild(name)
+    if old then old:Destroy() end
+end
+
+--==================================================
+--=== STAGE 3 ===
+--==================================================
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "VXC_EggESP_V349"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 999
+gui.Parent = playerGui
+
+local frame = Instance.new("Frame")
+frame.Name = "Main"
+frame.Size = UDim2.fromOffset(PANEL_WIDTH, PANEL_HEIGHT)
+frame.AnchorPoint = Vector2.new(1, 0.5)
+frame.Position = UDim2.new(1, -12, 0.5, 0)
+frame.BackgroundColor3 = DARK_BACKGROUND
+frame.BorderSizePixel = 0
+frame.Active = true
+frame.Parent = gui
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+
+local outline = Instance.new("UIStroke")
+outline.Color = YELLOW
+outline.Thickness = 2
+outline.Parent = frame
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -12, 0, 27)
+title.Position = UDim2.fromOffset(6, 3)
+title.BackgroundTransparency = 1
+title.Text = "VXC EGG ESP V3.4.9"
+title.TextColor3 = YELLOW
+title.Font = Enum.Font.GothamBold
+title.TextSize = 12
+title.Parent = frame
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -12, 0, 24)
+status.Position = UDim2.fromOffset(6, 30)
+status.BackgroundTransparency = 1
+status.Text = "Memuat data egg..."
+status.TextColor3 = Color3.fromRGB(220, 225, 235)
+status.Font = Enum.Font.Gotham
+status.TextSize = 10
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.TextWrapped = true
+status.Parent = frame
+
+local listHeader = Instance.new("TextLabel")
+listHeader.Size = UDim2.new(1, -12, 0, 20)
+listHeader.Position = UDim2.fromOffset(6, 55)
+listHeader.BackgroundColor3 = YELLOW_DARK
+listHeader.BorderSizePixel = 0
+listHeader.Text = "  EGG NAME / VALUE / RARITY - KLIK"
+listHeader.TextColor3 = YELLOW
+listHeader.Font = Enum.Font.GothamBold
+listHeader.TextSize = 8
+listHeader.TextXAlignment = Enum.TextXAlignment.Left
+listHeader.Parent = frame
+Instance.new("UICorner", listHeader).CornerRadius = UDim.new(0, 4)
+
+local list = Instance.new("ScrollingFrame")
+list.Name = "EggList"
+list.Size = UDim2.new(1, -12, 0, 145)
+list.Position = UDim2.fromOffset(6, 79)
+list.BackgroundColor3 = Color3.fromRGB(10, 13, 20)
+list.BorderSizePixel = 0
+list.ScrollBarThickness = 4
+list.ScrollBarImageColor3 = YELLOW
+list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+list.ScrollingDirection = Enum.ScrollingDirection.Y
+list.Parent = frame
+Instance.new("UICorner", list).CornerRadius = UDim.new(0, 5)
+
+local layout = Instance.new("UIListLayout")
+layout.Padding = UDim.new(0, 4)
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Parent = list
+
+local padding = Instance.new("UIPadding")
+padding.PaddingTop = UDim.new(0, 5)
+padding.PaddingBottom = UDim.new(0, 5)
+padding.PaddingLeft = UDim.new(0, 5)
+padding.PaddingRight = UDim.new(0, 5)
+padding.Parent = list
+
+local function makeButton(text, x, y, width)
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.fromOffset(width, 25)
+    button.Position = UDim2.fromOffset(x, y)
+    button.BackgroundColor3 = YELLOW_BUTTON
+    button.TextColor3 = Color3.new(1, 1, 1)
+    button.Text = text
+    button.Font = Enum.Font.GothamBold
+    button.TextSize = 10
+    button.BorderSizePixel = 0
+    button.Parent = frame
+    Instance.new("UICorner", button).CornerRadius = UDim.new(0, 5)
+    return button
+end
+
+local toggleButton = makeButton("ESP: ON", 6, 230, 65)
+local scanButton = makeButton("SCAN", 76, 230, 55)
+local hideButton = makeButton("MINIMIZE", 136, 230, 78)
+
+local selectedLabel = Instance.new("TextLabel")
+selectedLabel.Size = UDim2.new(1, -12, 0, 20)
+selectedLabel.Position = UDim2.fromOffset(6, 260)
+selectedLabel.BackgroundTransparency = 1
+selectedLabel.Text = "Target: belum dipilih"
+selectedLabel.TextColor3 = YELLOW_LIGHT
+selectedLabel.Font = Enum.Font.GothamBold
+selectedLabel.TextSize = 9
+selectedLabel.TextXAlignment = Enum.TextXAlignment.Left
+selectedLabel.TextTruncate = Enum.TextTruncate.AtEnd
+selectedLabel.Parent = frame
+
+local flyButton = makeButton("AUTO FLY: OFF", 6, 285, 125)
+flyButton.BackgroundColor3 = Color3.fromRGB(25, 115, 70)
+local stopButton = makeButton("STOP", 136, 285, 78)
+stopButton.BackgroundColor3 = Color3.fromRGB(135, 50, 55)
+
+local miniButton = Instance.new("TextButton")
+miniButton.Name = "Reopen"
+miniButton.Size = UDim2.fromOffset(70, 24)
+miniButton.AnchorPoint = Vector2.new(1, 0.5)
+miniButton.Position = frame.Position
+miniButton.BackgroundColor3 = DARK_BACKGROUND
+miniButton.Text = "VXC ESP"
+miniButton.TextColor3 = YELLOW
+miniButton.Font = Enum.Font.GothamBold
+miniButton.TextSize = 11
+miniButton.Visible = false
+miniButton.Parent = gui
+Instance.new("UICorner", miniButton).CornerRadius = UDim.new(0, 6)
+local miniOutline = Instance.new("UIStroke")
+miniOutline.Color = YELLOW
+miniOutline.Thickness = 2
+miniOutline.Parent = miniButton
+
+local function updateMiniPosition()
+    miniButton.Position = frame.Position
+end
+hideButton.Activated:Connect(function()
+    frame.Visible = false
+    miniButton.Visible = true
+    updateMiniPosition()
+end)
+miniButton.Activated:Connect(function()
+    frame.Visible = true
+    miniButton.Visible = false
+end)
+
+--==================================================
+--=== STAGE 4 ===
+--==================================================
+
+local dragging, dragInput, dragStart, startPosition = false, nil, nil, nil
+title.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPosition = frame.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then dragging = false end
+        end)
+    end
+end)
+title.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input == dragInput then
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(startPosition.X.Scale, startPosition.X.Offset + delta.X, startPosition.Y.Scale, startPosition.Y.Offset + delta.Y)
+        updateMiniPosition()
+    end
+end)
+
+--==================================================
+--=== STAGE 5 ===
+--==================================================
+
+local eggState, assetsDir, assetEarnings
+local recordsByUid = {}
+local moduleCache, infoCache, partCache = {}, {}, {}
+local worldObjects, espLabels, carriedLabels = {}, {}, {}
+local listEntries, eggInfoCache = {}, {}
+local enabled, destroyed, scanBusy, refreshRequested = true, false, false, false
+local forceWorldScan, lastDataRead, lastWorldScan = true, 0, 0
+local connections = {}
+
+local function connect(signal, callback)
+    local c = signal:Connect(callback)
+    table.insert(connections, c)
+    return c
+end
+
+local function findModule(names)
+    local key = table.concat(names, "|")
+    local cached = moduleCache[key]
+    if cached and cached.Parent then return cached end
+    moduleCache[key] = nil
+    local roots = {
+        ReplicatedStorage:FindFirstChild("Data"), ReplicatedStorage:FindFirstChild("Client"),
+        ReplicatedStorage:FindFirstChild("Shared"), ReplicatedStorage, ReplicatedFirst,
+        player:FindFirstChild("PlayerScripts")
+    }
+    local visited, checked = {}, 0
+    for _, root in ipairs(roots) do
+        if root and not visited[root] then
+            visited[root] = true
+            local ok, descendants = pcall(function() return root:GetDescendants() end)
+            if ok then
+                for _, object in ipairs(descendants) do
+                    checked += 1
+                    if checked > 15000 then return nil end
+                    if object:IsA("ModuleScript") then
+                        for _, name in ipairs(names) do
+                            if object.Name:lower() == name:lower() then
+                                moduleCache[key] = object
+                                return object
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function safeRequire(names)
+    local moduleScript = findModule(names)
+    if not moduleScript then return nil end
+    local ok, result = pcall(require, moduleScript)
+    if ok and type(result) == "table" then return result end
+    return nil
+end
+
+local function loadGameData(force)
+    if not force and os.clock() - lastDataRead < DATA_CACHE_INTERVAL then return next(recordsByUid) ~= nil end
+    lastDataRead = os.clock()
+    eggState = eggState or safeRequire({"EggState", "EggStateClient"})
+    assetsDir = assetsDir or safeRequire({"Assets", "AssetsDir", "AssetDirectory", "AssetsDirectory"})
+    assetEarnings = assetEarnings or safeRequire({"AssetEarnings", "AssetEarning"})
+    if assetsDir and type(assetsDir.Directory) == "table" then assetsDir = assetsDir.Directory end
+    if not eggState or type(eggState.ReadFieldEggs) ~= "function" then return false end
+    local ok, result = pcall(eggState.ReadFieldEggs)
+    if not ok or type(result) ~= "table" or type(result.Records) ~= "table" then return false end
+    local updated = {}
+    for _, record in pairs(result.Records) do
+        if type(record) == "table" and record.Uid ~= nil then updated[tostring(record.Uid)] = record end
+    end
+    recordsByUid = updated
+    table.clear(infoCache)
+    return true
+end
+
+local function getRecord(object)
+    local current = object
+    for _ = 1, 12 do
+        if not current then break end
+        for _, attribute in ipairs({"Uid", "UID", "EggUid", "AssetUid"}) do
+            local ok, value = pcall(function() return current:GetAttribute(attribute) end)
+            if ok and value ~= nil then
+                local record = recordsByUid[tostring(value)]
+                if record then return record end
+            end
+        end
+        local record = recordsByUid[tostring(current.Name)]
+        if record then return record end
+        current = current.Parent
+    end
+    return nil
+end
+
+--==================================================
+--=== STAGE 6 ===
+--==================================================
+
+local function findPart(object)
+    if not object then return nil end
+    local cached = partCache[object]
+    if cached and cached.Parent and cached:IsA("BasePart") then return cached end
+    if object:IsA("BasePart") then partCache[object] = object; return object end
+    if not object:IsA("Model") then return nil end
+    local hitbox = object:FindFirstChild("Hitbox", true)
+    if hitbox and hitbox:IsA("BasePart") then partCache[object] = hitbox; return hitbox end
+    local part = object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
+    if part then partCache[object] = part end
+    return part
+end
+
+local function getInfo(record)
+    if type(record) ~= "table" then return nil, "Tidak tersedia", "Tidak tersedia", -1 end
+    local uid = tostring(record.Uid or "")
+    local cached = infoCache[uid]
+    if uid ~= "" and cached and cached.record == record then return cached.name, cached.rate, cached.rarity, cached.numericRate end
+    local asset
+    if assetsDir and record.AssetCategory ~= nil then asset = assetsDir[record.AssetCategory] end
+    local name = (asset and (asset.DisplayName or asset.Name)) or record.DisplayName or record.Name
+    local rarity = (asset and asset.Rarity) or record.Rarity
+    if type(rarity) == "table" then rarity = rarity.DisplayName or rarity._id or rarity.Id or rarity.Name end
+    rarity = (type(rarity) == "string" and rarity ~= "") and rarity or "Tidak tersedia"
+    local rate, numericRate = "Tidak tersedia", -1
+    if type(assetEarnings) == "table" then
+        local item = {Category = record.AssetCategory, Scale = tonumber(record.AssetScale) or 1, Mutations = record.Mutations or {}}
+        local fn = assetEarnings.LiveRatePerSecond
+        if type(fn) == "function" then
+            local ok, value = pcall(fn, item, nil, nil, player)
+            if ok and type(value) == "number" and value == value and value >= 0 and value < math.huge then numericRate = value end
+        end
+        if numericRate < 0 then
+            fn = assetEarnings.MutationOnlyRatePerSecond
+            if type(fn) == "function" then
+                local ok, value = pcall(fn, item)
+                if ok and type(value) == "number" and value == value and value >= 0 and value < math.huge then numericRate = value end
+            end
+        end
+    end
+    if numericRate >= 0 then
+        rate = string.format("%.2f/s", numericRate)
+    else
+        local raw = record.Value or record.value or record.Income or record.IncomePerSecond
+            or (asset and (asset.Value or asset.Income or asset.IncomePerSecond))
+        if type(raw) == "number" and raw >= 0 and raw < math.huge then numericRate = raw; rate = tostring(raw) end
+    end
+    name = name and tostring(name) or nil
+    if uid ~= "" then infoCache[uid] = {record = record, name = name, rate = rate, rarity = rarity, numericRate = numericRate} end
+    return name, rate, rarity, numericRate
+end
+
+local function isUnknown(value)
+    if value == nil then return true end
+    local s = tostring(value):lower():match("^%s*(.-)%s*$")
+    return s == "" or s == "unknown" or s == "undefined" or s == "nil" or s == "none" or s == "n/a" or s == "tidak tersedia" or s == "tidak diketahui"
+end
+local function hasValidInfo(name, rate, rarity)
+    return not isUnknown(name) and not isUnknown(rate) and not isUnknown(rarity)
+end
+
+--==================================================
+--=== STAGE 7 ===
+--==================================================
+
+local espFolder = Instance.new("Folder")
+espFolder.Name = "VXC_EggESP_Objects"
+espFolder.Parent = gui
+
+local function removeLabel(object)
+    local billboard = espLabels[object]
+    if billboard then billboard:Destroy() end
+    espLabels[object] = nil
+end
+local function removeCarriedLabel(uid)
+    local billboard = carriedLabels[uid]
+    if billboard then billboard:Destroy() end
+    carriedLabels[uid] = nil
+end
+local function clearESP()
+    for object in pairs(espLabels) do removeLabel(object) end
+    for uid in pairs(carriedLabels) do removeCarriedLabel(uid) end
+end
+
+local selectedEgg, selectedPart
+local function selectEgg(object)
+    if not object or not object.Parent then status.Text = "Target egg tidak tersedia"; return end
+    selectedEgg, selectedPart = object, findPart(object)
+    local info = eggInfoCache[object]
+    selectedLabel.Text = "Target: " .. (info and info.name or object.Name)
+    for eggObject, entry in pairs(listEntries) do
+        local stroke = entry and entry:FindFirstChildOfClass("UIStroke")
+        if stroke then stroke.Color = eggObject == selectedEgg and YELLOW or YELLOW_STROKE; stroke.Thickness = eggObject == selectedEgg and 2 or 1 end
+    end
+    status.Text = selectedPart and "Target dipilih: " .. object.Name or "Bagian fisik egg tidak ditemukan"
+end
+
+local function updateListEntry(object, name, rarity, rate, numericRate)
+    local entry = listEntries[object]
+    if not entry or not entry.Parent then
+        entry = Instance.new("TextButton")
+        entry.Name = "EggEntry"
+        entry.Size = UDim2.new(1, -2, 0, 55)
+        entry.BackgroundColor3 = Color3.fromRGB(25, 31, 44)
+        entry.Text = ""
+        entry.BorderSizePixel = 0
+        entry.Parent = list
+        Instance.new("UICorner", entry).CornerRadius = UDim.new(0, 5)
+        local stroke = Instance.new("UIStroke")
+        stroke.Color = YELLOW_STROKE
+        stroke.Thickness = 1
+        stroke.Parent = entry
+        for _, spec in ipairs({
+            {"EggName", 3, 18, Color3.new(1,1,1), Enum.Font.GothamBold, 10},
+            {"EggValue", 21, 15, GREEN, Enum.Font.Gotham, 9},
+            {"EggRarity", 37, 14, PURPLE, Enum.Font.Gotham, 9}
+        }) do
+            local label = Instance.new("TextLabel")
+            label.Name = spec[1]
+            label.Size = UDim2.new(1, -10, 0, spec[3])
+            label.Position = UDim2.fromOffset(5, spec[2])
+            label.BackgroundTransparency = 1
+            label.TextColor3 = spec[4]
+            label.Font = spec[5]
+            label.TextSize = spec[6]
+            label.TextXAlignment = Enum.TextXAlignment.Left
+            label.TextTruncate = Enum.TextTruncate.AtEnd
+            label.Parent = entry
+        end
+        entry.Activated:Connect(function() selectEgg(object) end)
+        listEntries[object] = entry
+    end
+    entry.EggName.Text = "EGG: " .. name
+    entry.EggValue.Text = "Value/Rate: " .. rate
+    entry.EggRarity.Text = "Rarity: " .. rarity
+    eggInfoCache[object] = {name = name, rarity = rarity, rate = rate, value = numericRate}
+    if selectedEgg == object then selectedLabel.Text = "Target: " .. name end
+end
+
+local function sortEggList()
+    local entries = {}
+    for object, entry in pairs(listEntries) do
+        if entry and entry.Parent and object.Parent then
+            local info = eggInfoCache[object]
+            table.insert(entries, {object = object, entry = entry, value = info and info.value or -1, name = info and info.name or object.Name})
+        end
+    end
+    table.sort(entries, function(a, b)
+        if a.value ~= b.value then return a.value > b.value end
+        return a.name:lower() < b.name:lower()
+    end)
+    for index, item in ipairs(entries) do item.entry.LayoutOrder = index end
+end
+
+local function createESP(object, record)
+    local part = findPart(object)
+    if not part then return false end
+    local name, rate, rarity, numericRate = getInfo(record)
+    if not hasValidInfo(name, rate, rarity) then removeLabel(object); return false end
+    updateListEntry(object, name, rarity, rate, numericRate)
+    if not enabled then removeLabel(object); return true end
+    local billboard = espLabels[object]
+    if not billboard or not billboard.Parent then
+        billboard = Instance.new("BillboardGui")
+        billboard.Name = "VXC_EggStatus"
+        billboard.Size = UDim2.fromOffset(190, 45)
+        billboard.StudsOffset = Vector3.new(0, 3, 0)
+        billboard.AlwaysOnTop = true
+        billboard.MaxDistance = MAX_DISTANCE
+        billboard.Parent = espFolder
+        local label = Instance.new("TextLabel")
+        label.Name = "Info"
+        label.Size = UDim2.fromScale(1, 1)
+        label.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
+        label.BackgroundTransparency = 0.15
+        label.TextColor3 = GREEN
+        label.TextStrokeTransparency = 0.35
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 10
+        label.TextWrapped = true
+        label.Parent = billboard
+        Instance.new("UICorner", label).CornerRadius = UDim.new(0, 5)
+        local stroke = Instance.new("UIStroke")
+        stroke.Color = YELLOW
+        stroke.Thickness = 1.5
+        stroke.Parent = label
+        espLabels[object] = billboard
+    end
+    billboard.Adornee = part
+    local label = billboard:FindFirstChild("Info")
+    local text = name .. "\nRate: " .. rate .. " | Rarity: " .. rarity
+    if label and label.Text ~= text then label.Text = text end
+    return true
+end
+
+--==================================================
+--=== STAGE 8 ===
+--==================================================
+
+local function isEggCandidate(object)
+    if not object or not object.Parent or (not object:IsA("Model") and not object:IsA("BasePart")) then return false end
+    local okPart, part = pcall(function() return findPart(object) end)
+    if not okPart or not part then return false end
+    local name = object.Name:lower()
+    if name:find("egg", 1, true) or name:find("eggslot", 1, true) then return true end
+    local okRecord, record = pcall(function() return getRecord(object) end)
+    if okRecord and record ~= nil then return true end
+    local current = object.Parent
+    for _ = 1, 12 do
+        if not current then break end
+        local ancestorName = current.Name:lower()
+        if ancestorName:find("egg", 1, true) or ancestorName == "placedeggrenders" or ancestorName == "areaeggslotsclient" then return true end
+        current = current.Parent
+    end
+    return false
+end
+
+--==================================================
+--=== STAGE 9 ===
+--==================================================
+
+local function addCandidate(object)
+    if destroyed or not object or not object.Parent then return end
+    if isEggCandidate(object) then worldObjects[object] = true end
+end
+local function removeCandidate(object)
+    worldObjects[object] = nil
+    partCache[object] = nil
+    removeLabel(object)
+end
+connect(Workspace.DescendantAdded, function(object)
+    task.defer(function() if not destroyed and object.Parent then addCandidate(object) end end)
+end)
+connect(Workspace.DescendantRemoving, function(object) removeCandidate(object) end)
+
+local function rebuildWorldCache()
+    local ok, descendants = pcall(function() return Workspace:GetDescendants() end)
+    if not ok then return end
+    local rebuilt = {}
+    for i, object in ipairs(descendants) do
+        if isEggCandidate(object) then rebuilt[object] = true end
+        if i % 500 == 0 then task.wait(); if destroyed then return end end
+    end
+    for object in pairs(worldObjects) do if object and object.Parent then rebuilt[object] = true end end
+    worldObjects = rebuilt
+    lastWorldScan = os.clock()
+    forceWorldScan = false
+end
+
+--==================================================
+--=== STAGE 10 ===
+--==================================================
+
+local function updateCarriedEggs()
+    local seen, count = {}, 0
+    for uid, record in pairs(recordsByUid) do
+        if type(record) == "table" and tostring(record.State):lower() == "carried" then
+            uid = tostring(uid)
+            local carrierId = tonumber(record.CarrierUserId)
+            local carrier = carrierId and Players:GetPlayerByUserId(carrierId)
+            local character = carrier and carrier.Character
+            local anchor = character and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart"))
+            local name, rate, rarity = getInfo(record)
+            if enabled and anchor and hasValidInfo(name, rate, rarity) then
+                seen[uid] = true
+                count += 1
+                local billboard = carriedLabels[uid]
+                if not billboard or not billboard.Parent then
+                    billboard = Instance.new("BillboardGui")
+                    billboard.Name = "VXC_CarriedEgg_" .. uid
+                    billboard.Size = UDim2.fromOffset(190, 45)
+                    billboard.StudsOffset = Vector3.new(0, 3, 0)
+                    billboard.AlwaysOnTop = true
+                    billboard.MaxDistance = MAX_DISTANCE
+                    billboard.Parent = espFolder
+                    local label = Instance.new("TextLabel")
+                    label.Name = "Info"
+                    label.Size = UDim2.fromScale(1, 1)
+                    label.BackgroundColor3 = DARK_BACKGROUND
+                    label.BackgroundTransparency = 0.12
+                    label.TextColor3 = GREEN
+                    label.Font = Enum.Font.GothamBold
+                    label.TextSize = 10
+                    label.TextWrapped = true
+                    label.Parent = billboard
+                    Instance.new("UICorner", label).CornerRadius = UDim.new(0, 5)
+                    local stroke = Instance.new("UIStroke")
+                    stroke.Color = YELLOW
+                    stroke.Thickness = 1.5
+                    stroke.Parent = label
+                    carriedLabels[uid] = billboard
+                end
+                billboard.Adornee = anchor
+                local label = billboard:FindFirstChild("Info")
+                local text = "CARRIED: " .. name .. "\nRate: " .. rate .. " | Rarity: " .. rarity
+                if label and label.Text ~= text then label.Text = text end
+            end
+        end
+    end
+    for uid in pairs(carriedLabels) do if not seen[uid] then removeCarriedLabel(uid) end end
+    return count
+end
+
+--==================================================
+-- STAGE 11: FLIGHT CONTROLLER
+--==================================================
+
+local humanoid, rootPart
+local function getCharacter()
+    local character = player.Character
+    if not character then return nil end
+    local hum = character:FindFirstChildOfClass("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if not hum or not root or hum.Health <= 0 then return nil end
+    return character, hum, root
+end
+local function refreshCharacter()
+    local _, hum, root = getCharacter()
+    humanoid, rootPart = hum, root
+end
+local function getHoverDestination(egg)
+    if not egg or not egg.Parent then return nil end
+    local part = findPart(egg)
+    if not part or not getCharacter() then return nil end
+    return Vector3.new(part.Position.X, FLY_HEIGHT_Y, part.Position.Z)
+end
+
+local flyEnabled, flyToken = false, 0
+local flyAttachment, flyVelocity, flyOrientation, flyConnection
+local savedHumanoid, savedAutoRotate, savedPlatformStand
+local returningToSpawn, returnToken = false, 0
+
+local function destroyFlyObjects()
+    if flyConnection then flyConnection:Disconnect(); flyConnection = nil end
+    if flyVelocity then flyVelocity:Destroy(); flyVelocity = nil end
+    if flyOrientation then flyOrientation:Destroy(); flyOrientation = nil end
+    if flyAttachment then flyAttachment:Destroy(); flyAttachment = nil end
+end
+local function stopFlying(message)
+    flyEnabled = false
+    flyToken += 1
+    destroyFlyObjects()
+    if savedHumanoid and savedHumanoid.Parent then
+        savedHumanoid.AutoRotate = savedAutoRotate
+        savedHumanoid.PlatformStand = savedPlatformStand
+        pcall(function() savedHumanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+    end
+    savedHumanoid = nil
+    refreshCharacter()
+    flyButton.Text = "AUTO FLY: OFF"
+    flyButton.BackgroundColor3 = Color3.fromRGB(25, 115, 70)
+    if message then status.Text = message end
+end
+local function createFlyController(root)
+    flyAttachment = Instance.new("Attachment")
+    flyAttachment.Name = "VXC_FlyAttachment"
+    flyAttachment.Parent = root
+    flyVelocity = Instance.new("LinearVelocity")
+    flyVelocity.Name = "VXC_FlyVelocity"
+    flyVelocity.Attachment0 = flyAttachment
+    flyVelocity.RelativeTo = Enum.ActuatorRelativeTo.World
+    flyVelocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+    flyVelocity.ForceLimitsEnabled = false
+    flyVelocity.VectorVelocity = Vector3.zero
+    flyVelocity.Parent = root
+    flyOrientation = Instance.new("AlignOrientation")
+    flyOrientation.Name = "VXC_FlyOrientation"
+    flyOrientation.Attachment0 = flyAttachment
+    flyOrientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+    flyOrientation.Responsiveness = 20
+    flyOrientation.Parent = root
+end
+local function setFacingDirection()
+    local camera = Workspace.CurrentCamera
+    if not camera or not flyOrientation then return end
+    local look = camera.CFrame.LookVector
+    local horizontal = Vector3.new(look.X, 0, look.Z)
+    if horizontal.Magnitude > 0.001 then flyOrientation.CFrame = CFrame.lookAt(Vector3.zero, horizontal.Unit) end
+end
+
+--==================================================
+-- STAGE 12: RETURN TO SPAWN (FIXED)
+--==================================================
+
+local function findReturnTargetPart()
+    local named = Workspace:FindFirstChild("SpawnLocation", true)
+    if named and named:IsA("BasePart") then return named end
+    for _, object in ipairs(Workspace:GetDescendants()) do
+        if object:IsA("SpawnLocation") then return object end
+    end
+    return nil
+end
+
+local function returnToTargetPart()
+    if not RETURN_TO_SPAWN_ENABLED or returningToSpawn then return end
+    local character, hum, root = getCharacter()
+    local targetPart = findReturnTargetPart()
+    if not character or not targetPart then
+        status.Text = not character and "Return gagal: karakter tidak tersedia" or "Return gagal: SpawnLocation tidak ditemukan"
+        return
+    end
+
+    returningToSpawn = true
+    returnToken += 1
+    local myToken = returnToken
+    stopFlying()
+    character, hum, root = getCharacter()
+    if not character then returningToSpawn = false; status.Text = "Return gagal: karakter tidak tersedia"; return end
+    targetPart = findReturnTargetPart()
+    if not targetPart then returningToSpawn = false; status.Text = "Return gagal: SpawnLocation tidak ditemukan"; return end
+
+    local attachment = Instance.new("Attachment")
+    attachment.Name = "VXC_ReturnAttachment"
+    attachment.Parent = root
+    local velocity = Instance.new("LinearVelocity")
+    velocity.Name = "VXC_ReturnVelocity"
+    velocity.Attachment0 = attachment
+    velocity.RelativeTo = Enum.ActuatorRelativeTo.World
+    velocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+    velocity.ForceLimitsEnabled = false
+    velocity.VectorVelocity = Vector3.zero
+    velocity.Parent = root
+
+    local oldAutoRotate = hum.AutoRotate
+    hum.AutoRotate = false
+
+    -- Actual WalkSpeed, no forced minimum and no percentage multiplier.
+    local speed = math.max(0, hum.WalkSpeed)
+    local startedAt = os.clock()
+    local reached, cancelled = false, false
+
+    while gui.Parent and myToken == returnToken and os.clock() - startedAt < RETURN_TIMEOUT do
+        local currentCharacter, currentHum, currentRoot = getCharacter()
+        if not currentCharacter or currentCharacter ~= character or currentRoot ~= root then
+            cancelled = true
+            break
+        end
+        targetPart = findReturnTargetPart()
+        if not targetPart then status.Text = "Return gagal: SpawnLocation hilang"; break end
+
+        local targetPosition = Vector3.new(targetPart.Position.X, FLY_HEIGHT_Y, targetPart.Position.Z)
+        local offset = targetPosition - root.Position
+        local horizontal = Vector3.new(offset.X, 0, offset.Z)
+        local horizontalDistance = horizontal.Magnitude
+        local verticalDifference = offset.Y
+
+        -- If WalkSpeed is zero, do not silently substitute a faster speed.
+        local horizontalSpeed = speed
+        if horizontalDistance < RETURN_SLOW_DISTANCE then
+            horizontalSpeed = speed * math.clamp(horizontalDistance / RETURN_SLOW_DISTANCE, 0.15, 1)
+        end
+        local horizontalVelocity = Vector3.zero
+        if horizontalDistance > 0.15 and speed > 0 then
+            horizontalVelocity = horizontal.Unit * horizontalSpeed
+        end
+        local verticalVelocity = math.clamp(verticalDifference * 8, -100, 100)
+        velocity.VectorVelocity = Vector3.new(horizontalVelocity.X, verticalVelocity, horizontalVelocity.Z)
+
+        if horizontalDistance <= RETURN_ARRIVAL_DISTANCE and math.abs(verticalDifference) <= HEIGHT_TOLERANCE then
+            reached = true
+            break
+        end
+        status.Text = string.format("RETURN | Jarak %.1f | WalkSpeed %.1f", horizontalDistance, speed)
+        RunService.Heartbeat:Wait()
+    end
+
+    if velocity.Parent then velocity:Destroy() end
+    if attachment.Parent then attachment:Destroy() end
+    if hum.Parent then hum.AutoRotate = oldAutoRotate end
+    if myToken ~= returnToken then return end
+    if root.Parent then
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end
+    returningToSpawn = false
+    refreshCharacter()
+
+    if reached then
+        if AUTO_FLY_OFF_AFTER_RETURN then stopFlying("Return selesai | AUTO FLY OFF") end
+        status.Text = "Tiba di atas SpawnLocation | AUTO FLY OFF"
+    elseif cancelled then
+        status.Text = "Return dibatalkan"
+    else
+        status.Text = "Return gagal: target tidak tercapai"
+    end
+end
+
+--==================================================
+--=== STAGE 13 ===
+--==================================================
+
+local pickupConfirmed, pickupTargetUid, pickupTargetState, pickupLastCheck = false, nil, nil, 0
+local function getEggRecordState(targetEgg)
+    if not targetEgg then return nil, nil end
+    local record = getRecord(targetEgg)
+    if not record then return nil, nil end
+    local uid = tostring(record.Uid or "")
+    return tostring(record.State or ""):lower(), uid ~= "" and uid or nil
+end
+local function checkPickupStatus(targetUid)
+    if not targetUid then return "unknown" end
+    loadGameData(true)
+    local record = recordsByUid[tostring(targetUid)]
+    if not record then return "unknown" end
+    local state = tostring(record.State or ""):lower()
+    if state == "carried" then
+        pickupConfirmed = true
+        pickupTargetState = "carried"
+        return "carried"
+    end
+    pickupTargetState = state
+    return state
+end
+
+local lastStealAttempt, stealBusy = 0, false
+local function getCarryPromptNearTarget(targetEgg)
+    local targetPart = findPart(targetEgg)
+    if not targetPart then return nil end
+    local bestPrompt, bestDistance = nil, math.huge
+    for _, object in ipairs(Workspace:GetDescendants()) do
+        if object.Name == "SmartPromptPart" then
+            local prompt = object:FindFirstChild("CarryAreaEgg")
+            if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled then
+                local promptPart = object:IsA("BasePart") and object or object:FindFirstChildWhichIsA("BasePart", true)
+                if promptPart then
+                    local distance = (promptPart.Position - targetPart.Position).Magnitude
+                    if distance < bestDistance then bestDistance, bestPrompt = distance, prompt end
+                end
+            end
+        end
+    end
+    if bestDistance <= STEAL_MAX_DISTANCE then return bestPrompt end
+    return nil
+end
+local function tryAutoSteal(targetEgg, forceAttempt)
+    if not AUTO_STEAL_ENABLED or stealBusy or not targetEgg or not targetEgg.Parent then return end
+    if not forceAttempt and os.clock() - lastStealAttempt < STEAL_RETRY_DELAY then return end
+    local _, _, root = getCharacter()
+    if not root then return end
+    local prompt = getCarryPromptNearTarget(targetEgg)
+    if not prompt then return end
+    local promptPart = prompt.Parent
+    if not promptPart:IsA("BasePart") then promptPart = prompt:FindFirstAncestorWhichIsA("BasePart") end
+    if not promptPart or (root.Position - promptPart.Position).Magnitude > STEAL_MAX_DISTANCE then return end
+    lastStealAttempt = os.clock()
+    stealBusy = true
+    task.spawn(function()
+        local ok, result = pcall(function()
+            if typeof(fireproximityprompt) == "function" then fireproximityprompt(prompt); return true end
+            return false
+        end)
+        if gui.Parent then
+            status.Text = ok and result and "Interaksi dicoba; menunggu respons server..." or "Auto Steal tidak didukung oleh executor ini"
+            task.wait(0.5)
+            if gui.Parent and not targetEgg.Parent then
+                status.Text = "Target menghilang; periksa hasil pickup"
+            elseif gui.Parent and selectedEgg == targetEgg and ok and result then
+                status.Text = "Pickup belum terkonfirmasi oleh data game"
+            end
+        end
+        stealBusy = false
+    end)
+end
+
+--==================================================
+-- STAGE 14: AUTO FLY SYSTEM
+-- MATCHED HORIZONTAL SPEED EDITION
+--==================================================
+
+local function startFlying()
+    if flyEnabled or returningToSpawn then return end
+    if not selectedEgg or not selectedEgg.Parent then
+        status.Text = "Pilih egg dari daftar terlebih dahulu"
+        return
+    end
+
+    local targetEgg = selectedEgg
+    if not findPart(targetEgg) then
+        status.Text = "Bagian fisik egg tidak ditemukan"
+        return
+    end
+
+    local character, hum, root = getCharacter()
+    if not character then
+        status.Text = "Karakter belum siap"
+        return
+    end
+    if root.Anchored then
+        status.Text = "HumanoidRootPart terkunci"
+        return
+    end
+
+    destroyFlyObjects()
+
+    savedHumanoid = hum
+    savedAutoRotate = hum.AutoRotate
+    savedPlatformStand = hum.PlatformStand
+
+    hum.AutoRotate = false
+    hum.PlatformStand = false
+
+    createFlyController(root)
+
+    flyEnabled = true
+    flyToken += 1
+
+    local token = flyToken
+    local startedAt = os.clock()
+    local phase = "APPROACH"
+
+    local pickupWaitStarted, targetLostStarted = nil, nil
+    local lastPickupCheckLocal, lastStealRetry = 0, 0
+
+    loadGameData(true)
+
+    local initialState, targetUid = getEggRecordState(targetEgg)
+
+    pickupConfirmed = initialState == "carried"
+    pickupTargetUid = targetUid
+    pickupTargetState = initialState
+    pickupLastCheck = 0
+
+    flyButton.Text = "AUTO FLY: ON"
+    flyButton.BackgroundColor3 = Color3.fromRGB(20, 160, 90)
+    status.Text = "Terbang menuju egg: " .. targetEgg.Name
+
+    flyConnection = RunService.Heartbeat:Connect(function()
+        if not flyEnabled or token ~= flyToken then
+            return
+        end
+
+        local currentCharacter, currentHum, currentRoot = getCharacter()
+
+        if not currentCharacter
+            or currentCharacter ~= character
+            or currentRoot ~= root then
+            stopFlying("Karakter berubah atau tidak tersedia")
+            return
+        end
+
+        local now = os.clock()
+
+        if now - startedAt >= FLY_TIMEOUT then
+            stopFlying("Batas waktu penerbangan tercapai")
+            return
+        end
+
+        if pickupConfirmed then
+            phase = "ASCEND"
+        end
+
+        -- Menunggu konfirmasi pickup jika egg menghilang.
+        if phase ~= "ASCEND" and not targetEgg.Parent then
+            if not targetLostStarted then
+                targetLostStarted = now
+            end
+
+            if now - lastPickupCheckLocal >= PICKUP_POLL_INTERVAL then
+                lastPickupCheckLocal = now
+
+                local state = checkPickupStatus(targetUid)
+
+                if state == "carried" then
+                    pickupConfirmed = true
+                    pickupTargetState = "carried"
+                    phase = "ASCEND"
+
+                    status.Text =
+                        "Pickup terkonfirmasi | Naik ke Y 115.93"
+                end
+            end
+
+            if phase ~= "ASCEND" then
+                if now - targetLostStarted >= PICKUP_CONFIRM_TIMEOUT then
+                    stopFlying(
+                        "Egg hilang; status carried tidak terkonfirmasi"
+                    )
+                    return
+                end
+
+                flyVelocity.VectorVelocity = Vector3.zero
+                status.Text = "Egg hilang | Menunggu konfirmasi carried"
+                return
+            end
+        end
+
+        local targetPart = targetEgg.Parent and findPart(targetEgg)
+
+        if (phase == "APPROACH" or phase == "DESCEND")
+            and not targetPart then
+            stopFlying("Bagian fisik egg tidak ditemukan")
+            return
+        end
+
+        if phase == "APPROACH" then
+            local targetPosition = Vector3.new(
+                targetPart.Position.X,
+                FLY_HEIGHT_Y,
+                targetPart.Position.Z
+            )
+
+            local offset = targetPosition - currentRoot.Position
+
+            local horizontal = Vector3.new(
+                offset.X,
+                0,
+                offset.Z
+            )
+
+            local distance = horizontal.Magnitude
+            local verticalDifference = offset.Y
+
+            -- KECEPATAN HORIZONTAL DISAMAKAN.
+            local horizontalVelocity = Vector3.zero
+
+            if distance > APPROACH_DISTANCE then
+                horizontalVelocity =
+                    horizontal.Unit * FLY_HORIZONTAL_SPEED
+            end
+
+            local verticalVelocity = math.clamp(
+                verticalDifference * 5,
+                -ASCEND_SPEED,
+                ASCEND_SPEED
+            )
+
+            flyVelocity.VectorVelocity = Vector3.new(
+                horizontalVelocity.X,
+                verticalVelocity,
+                horizontalVelocity.Z
+            )
+
+            if distance <= APPROACH_DISTANCE
+                and math.abs(verticalDifference) <= HEIGHT_TOLERANCE then
+
+                phase = "DESCEND"
+                pickupWaitStarted = nil
+                lastPickupCheckLocal = 0
+                lastStealRetry = 0
+
+                status.Text = "Mendekati egg | Turun ke Y 71.19"
+            end
+
+        elseif phase == "DESCEND" then
+            local targetPosition = Vector3.new(
+                targetPart.Position.X,
+                EGG_PICKUP_HEIGHT_Y,
+                targetPart.Position.Z
+            )
+
+            local offset = targetPosition - currentRoot.Position
+
+            local horizontal = Vector3.new(
+                offset.X,
+                0,
+                offset.Z
+            )
+
+            local distance = horizontal.Magnitude
+            local verticalDifference = offset.Y
+
+            -- KECEPATAN HORIZONTAL SAMA DENGAN APPROACH.
+            local horizontalVelocity = Vector3.zero
+
+            if distance > APPROACH_DISTANCE then
+                horizontalVelocity =
+                    horizontal.Unit * FLY_HORIZONTAL_SPEED
+            end
+
+            local verticalVelocity = math.clamp(
+                verticalDifference * 10,
+                -DESCEND_SPEED,
+                DESCEND_SPEED
+            )
+
+            flyVelocity.VectorVelocity = Vector3.new(
+                horizontalVelocity.X,
+                verticalVelocity,
+                horizontalVelocity.Z
+            )
+
+            if distance <= APPROACH_DISTANCE
+                and math.abs(verticalDifference) <= HEIGHT_TOLERANCE then
+
+                flyVelocity.VectorVelocity = Vector3.zero
+
+                if not pickupWaitStarted then
+                    pickupWaitStarted = now
+                end
+
+                if now - lastPickupCheckLocal >= PICKUP_POLL_INTERVAL then
+                    lastPickupCheckLocal = now
+
+                    local state = checkPickupStatus(targetUid)
+
+                    if state == "carried" then
+                        pickupConfirmed = true
+                        pickupTargetState = "carried"
+                        phase = "ASCEND"
+
+                        status.Text =
+                            "Egg carried terkonfirmasi | Naik kembali"
+                    end
+                end
+
+                if phase == "DESCEND" then
+                    if now - lastStealRetry >= STEAL_RETRY_DELAY then
+                        lastStealRetry = now
+                        tryAutoSteal(targetEgg, true)
+                    end
+
+                    if now - pickupWaitStarted >= PICKUP_CONFIRM_TIMEOUT then
+                        stopFlying(
+                            "Pickup tidak terkonfirmasi | Auto Fly dihentikan"
+                        )
+                        return
+                    end
+
+                    status.Text = string.format(
+                        "Menunggu pickup | Y: %.2f",
+                        currentRoot.Position.Y
+                    )
+                end
+            end
+
+        elseif phase == "ASCEND" then
+            local verticalDifference =
+                FLY_HEIGHT_Y - currentRoot.Position.Y
+
+            flyVelocity.VectorVelocity = Vector3.new(
+                0,
+                math.clamp(
+                    verticalDifference * 8,
+                    -ASCEND_SPEED,
+                    ASCEND_SPEED
+                ),
+                0
+            )
+
+            if math.abs(verticalDifference) <= HEIGHT_TOLERANCE then
+                flyVelocity.VectorVelocity = Vector3.zero
+
+                stopFlying(
+                    "Pickup terkonfirmasi | Memulai perjalanan pulang"
+                )
+
+                if RETURN_TO_SPAWN_ENABLED then
+                    task.spawn(returnToTargetPart)
+                else
+                    status.Text = "Ketinggian tercapai | AUTO FLY OFF"
+                end
+
+                return
+            end
+        end
+
+        setFacingDirection()
+    end)
+end
+
+--==================================================
+--=== STAGE 15 ===
+--==================================================
+
+local function scan(force)
+    if scanBusy or destroyed then if force then refreshRequested = true end; return end
+    scanBusy = true
+    local ok, err = pcall(function()
+        loadGameData(force == true)
+        if force or forceWorldScan or os.clock() - lastWorldScan >= WORLD_RESCAN_INTERVAL then rebuildWorldCache() end
+        local live, seenUid = {}, {}
+        local matched, labeled, filtered = 0, 0, 0
+
+        for object in pairs(worldObjects) do
+            if destroyed then break end
+            if not object or not object.Parent then
+                worldObjects[object] = nil
+                removeLabel(object)
+            else
+                local record = getRecord(object)
+                if record then
+                    local uid = tostring(record.Uid or "")
+                    if uid == "" or not seenUid[uid] then
+                        if uid ~= "" then seenUid[uid] = true end
+                        if tostring(record.State):lower() == "carried" then
+                            removeLabel(object)
+                            live[object] = true
+                        else
+                            local name, rate, rarity = getInfo(record)
+                            if hasValidInfo(name, rate, rarity) then
+                                matched += 1
+                                live[object] = true
+                                if createESP(object, record) then labeled += 1 end
+                            else
+                                filtered += 1
+                                removeLabel(object)
+                            end
+                        end
+                    else
+                        live[object] = true
+                    end
+                else
+                    removeLabel(object)
+                end
+            end
+        end
+
+        for object, billboard in pairs(espLabels) do
+            if not enabled or not live[object] then
+                if billboard then billboard:Destroy() end
+                espLabels[object] = nil
+            end
+        end
+
+        for object, entry in pairs(listEntries) do
+            if not live[object] or not object.Parent then
+                -- Do not cancel an active pickup/return sequence just because
+                -- the target disappeared from the scanned world list.
+                if entry then entry:Destroy() end
+                listEntries[object] = nil
+                eggInfoCache[object] = nil
+                if selectedEgg == object then
+                    selectedLabel.Text = "Target: menunggu konfirmasi pickup"
+                    if not flyEnabled and not returningToSpawn then
+                        selectedEgg, selectedPart = nil, nil
+                    end
+                end
+            end
+        end
+
+        sortEggList()
+        local carried = updateCarriedEggs()
+        if not flyEnabled and not returningToSpawn then
+            status.Text = string.format("%s | Egg: %d | Label: %d | Carried: %d | Unknown: %d", enabled and "ESP ON" or "ESP OFF", matched, labeled, carried, filtered)
+        end
+    end)
+    scanBusy = false
+    if not ok then
+        warn("[VXC EGG ESP V3.4.9] Scan error:", err)
+        status.Text = "Scan error - cek Output"
+    end
+    if refreshRequested and not destroyed then refreshRequested = false; forceWorldScan = true end
+end
+
+--==================================================
+--=== STAGE 16 ===
+--==================================================
+
+toggleButton.Activated:Connect(function()
+    enabled = not enabled
+    toggleButton.Text = enabled and "ESP: ON" or "ESP: OFF"
+    if not enabled then clearESP(); status.Text = "ESP OFF | Daftar tetap aktif" else status.Text = "ESP ON | Memperbarui..." end
+    scan(false)
+end)
+scanButton.Activated:Connect(function() forceWorldScan = true; scan(true) end)
+flyButton.Activated:Connect(function()
+    if flyEnabled then
+        stopFlying("Auto Fly dimatikan")
+    elseif returningToSpawn then
+        status.Text = "Sedang menuju SpawnLocation"
+    else
+        startFlying()
+    end
+end)
+stopButton.Activated:Connect(function()
+    returnToken += 1
+    returningToSpawn = false
+    stopFlying("Penerbangan dihentikan")
+    local _, _, root = getCharacter()
+    if root then
+        for _, name in ipairs({"VXC_ReturnVelocity", "VXC_ReturnAttachment"}) do
+            local object = root:FindFirstChild(name)
+            if object then object:Destroy() end
+        end
+    end
+end)
+
+--==================================================
+--=== STAGE 17 ===
+--==================================================
+
+connect(player.CharacterAdded, function()
+    returnToken += 1
+    returningToSpawn = false
+    stopFlying("Karakter respawn")
+    task.wait(1)
+    refreshCharacter()
+    forceWorldScan = true
+    scan(true)
+end)
+connect(gui.Destroying, function()
+    destroyed = true
+    returnToken += 1
+    returningToSpawn = false
+    stopFlying()
+    for _, connection in ipairs(connections) do connection:Disconnect() end
+    clearESP()
+end)
+
+--==================================================
+--=== STAGE 18 ===
+--==================================================
+
+refreshCharacter()
+status.Text = "GUI aktif | Memuat data egg..."
+task.spawn(function()
+    task.wait(0.5)
+    loadGameData(true)
+    rebuildWorldCache()
+    scan(true)
+    while gui.Parent and not destroyed do
+        scan(false)
+        task.wait(SCAN_INTERVAL)
+    end
+end)
+print("[VXC EGG NAME ESP V3.4.9 ULTRA FAST MERGED] Loaded")
